@@ -45,7 +45,8 @@
 // **************************************************************************
 
 // Device name (also functions as hostname for WiFi purposes).
-#define DEV_NAME          "feather"
+#define DEV_NAME          "feather_office"
+#define ROOM_LOCATION     "office"
 
 // Debugging mode enabled; causes libraries to output debug information to
 // the serial monitor.
@@ -66,25 +67,33 @@
 // as an output.
 
 // Wireless network SSID and passphrase.
-#define WLAN_SSID         "YOUR-SSID-HERE"
-#define WLAN_PASS         "YOUR-PASSPHRASE-HERE"
+#define WLAN_SSID         "Wisdom"
+#define WLAN_PASS         "asoccinnr3316"
 
 // MQTT server details.
-#define MQTT_SERVER       "YOUR.MQTT.SERVER.HOSTNAME"
+#define MQTT_SERVER       "developingwisdom.org"
 #define MQTT_SERVERPORT   1883
 #define MQTT_CLIENTID     DEV_NAME
 #define MQTT_USERNAME     ""
 #define MQTT_PASSWORD     ""
 
+#include <Wire.h>
+#include "Adafruit_MCP9808.h"
+
+// Create the MCP9808 temperature sensor object
+Adafruit_MCP9808 tempsensor = Adafruit_MCP9808();
+
 // Watchdog timer configuration (MQTT topic and interval (s).
-#define WATCHDOG_FEED     "watchdog/devices"
+#define WATCHDOG_FEED     "iot/watchdog/devices"
 #define WATCHDOG_INTERVAL 60
+#define TEMPERATURE_INTERVAL 30
 
 // Battery monitoring enabled.
 #define VBAT_ENABLED      1
 
 // Low battery reports posted to this MQTT topic.
-#define BATTERY_FEED      "status/battery"
+#define BATTERY_FEED      "iot/status/battery"
+#define REPORT_FEED       "iot/preprocess"
 
 // Battery monitoring assumes that the VBat pin of the Feather HUZZAH is
 // connected to the analog input pin via a 1 M/200K voltage divider, as per
@@ -901,11 +910,68 @@ void loop()
 // * APPLICATION CODE - INSERT USER CODE BELOW                              *
 // **************************************************************************
 
+// MQTT topic for battery level reports.
+Adafruit_MQTT_Publish testFeed = Adafruit_MQTT_Publish (&mqttClient, REPORT_FEED);
+Task _tGetTemp (TEMPERATURE_INTERVAL * TASK_SECOND, TASK_FOREVER, &updateTemperature, NULL, false, NULL, NULL);
+
+char* string2char(String command){
+    if(command.length()!=0){
+        char *p = const_cast<char*>(command.c_str());
+        return p;
+    }
+}
+
+char* float2char(float command) {
+  String temp_string = String(command);
+  return string2char(temp_string);
+}
+
+void updateTemperature ()
+{
+  float temperature = getTempF();
+  float tempearture_celsius = tempsensor.readTempC();
+
+  oledClear();
+  oledPrintln(string2char("Temperature: " + String(temperature)));
+  oledDisplay();
+  
+  // Format as JSON
+  // Allocate memory pool for the object tree.
+  StaticJsonBuffer<128> jsonBuffer;
+
+  // Create the root of the object tree.
+  JsonObject& root = jsonBuffer.createObject();
+
+  // Add values to the object.
+  root["location"] = ROOM_LOCATION;
+  root["temperature_c"] = tempearture_celsius;
+  root["temperature_f"] = temperature;
+
+  char buffer[128];
+  root.printTo (buffer, sizeof(buffer));
+
+  if (!testFeed.publish(buffer))
+  {
+    Serial.println ("temperature update failed");
+  }
+}
+
+float getTempF() {
+  return tempsensor.readTempC() * 1.8 + 32;
+}
+
+
 // Initially set up application tasks (i.e., add them and enable them in the
 // task manager) and perform other initialization functions.
 void application_setup()
 {
-  // insert code here
+  if (!tempsensor.begin()) {
+    Serial.println("Couldn't find MCP9808!");
+    while (1);
+  }
+  
+  taskManager.addTask(_tGetTemp);
+  _tGetTemp.enable();
 }
 
 // This function is a callback from `fail ()` (see below) invoked on fatal errors
@@ -913,7 +979,7 @@ void application_setup()
 // down system activities and otherwise handling failure.
 void application_fail ()
 {
-  // insert code here
+  _tGetTemp.disable();
 }
 
 // This function is invoked immediately before an over-the-air update is installed.
